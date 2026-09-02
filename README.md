@@ -1,3 +1,4 @@
 - [Lesson1:IP地址和端口类](Assets/Scripts/Lesson1：IP地址和端口类)
 - [Lesson2:域名解析](Assets/Scripts/Lesson2：域名解析)
--[[Lesson3:序列化与反序列化](Assets/Scripts/Lesson3：序列化与反序列化)]
+- [Lesson3:序列化与反序列化](Assets/Scripts/Lesson3：序列化与反序列化)
+- [Lesson4：字符编码](Assets/Scripts/Lesson4：字符编码)
