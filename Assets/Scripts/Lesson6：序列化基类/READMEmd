@@ -1,0 +1,605 @@
+# 一、抽取二进制序列化基类
+当多个网络数据类都需要转换为 `byte[]` 时，如果每个类都重复编写：
+```
+BitConverter.GetBytes()
+CopyTo()
+index += ...
+Encoding.UTF8.GetBytes()
+```
+代码会大量重复。因此可以抽取一个二进制数据基类，把常用类型的写入逻辑统一封装。
+```
+BaseData
+│
+├─ GetBytesNum() → 获取序列化后的总字节数
+├─ Writing()     → 将对象序列化为 byte[]
+│
+├─ WriteInt()
+├─ WriteShort()
+├─ WriteLong()
+├─ WriteFloat()
+├─ WriteByte()
+├─ WriteBool()
+├─ WriteString()
+└─ WriteData()
+```
+
+# 二、BaseData 抽象类
+## 1.GetBytesNum
+用于计算当前对象序列化后需要多少字节：
+```
+public abstract int GetBytesNum();
+```
+子类必须根据自己的成员变量计算：
+```
+int    → 4 Byte
+short  → 2 Byte
+long   → 8 Byte
+float  → 4 Byte
+bool   → 1 Byte
+string → 4 Byte长度 + N Byte字符串内容
+```
+## 2.Writing
+用于把当前对象中的所有数据按照约定顺序写入 `byte[]`：
+```
+public abstract byte[] Writing();
+```
+基本流程：
+```
+计算总长度
+↓
+创建 byte[]
+↓
+index = 0
+↓
+依次写入成员变量
+↓
+返回 byte[]
+```
+
+# 三、封装基础类型写入
+## 1.ref index
+所有写入方法都使用：ref int index
+原因是每写入一个数据，都需要修改当前写入位置。
+例如：
+```
+protected void WriteInt(byte[] bytes, int value, ref int index)
+{
+    BitConverter.GetBytes(value).CopyTo(bytes, index);
+    index += sizeof(int);
+}
+```
+调用：
+```
+WriteInt(bytes, hp, ref index);
+```
+执行后：
+```
+原 index = 0
+
+写入 int
+↓
+占用 4 Byte
+↓
+index = 4
+```
+这样下一个数据就会从正确位置继续写入。
+
+## 2.基础类型封装
+```
+WriteInt()
+WriteShort()
+WriteLong()
+WriteFloat()
+WriteByte()
+WriteBool()
+```
+内部核心逻辑都是：
+```
+数据
+↓
+BitConverter.GetBytes()
+↓
+CopyTo(byte[], index)
+↓
+移动 index
+```
+
+# 四、字符串写入
+字符串属于变长数据，因此不能只写入字符串本身。
+需要按照：
+```
+字符串字节长度+字符串实际数据
+```
+进行存储。例如：
+```
+"Unity网络"
+↓ UTF-8
+byte[]
+↓
+长度 N
+```
+最终布局：
+```
+┌──────────────┬─────────────────┐
+│ 字符串字节长度 │ UTF-8字符串数据   │
+├──────────────┼─────────────────┤
+│    4 Byte    │      N Byte     │
+└──────────────┴─────────────────┘
+```
+封装方法：
+```
+protected void WriteString(
+    byte[] bytes,
+    string value,
+    ref int index)
+{
+    byte[] strBytes = Encoding.UTF8.GetBytes(value);
+
+    WriteInt(bytes, strBytes.Length, ref index);
+
+    strBytes.CopyTo(bytes, index);
+
+    index += strBytes.Length;
+}
+```
+
+# 五、自定义对象写入
+一个网络数据类中还可能包含另一个自定义数据对象。例如课件中的结构：
+```
+TestInfo
+│
+└─ Player
+```
+这种情况下可以让所有需要网络序列化的数据类都继承 `BaseData`，然后统一使用：
+```
+WriteData()
+```
+```
+protected void WriteData(
+    byte[] bytes,
+    BaseData data,
+    ref int index)
+{
+    data.Writing().CopyTo(bytes, index);
+    index += data.GetBytesNum();
+}
+```
+这样就可以实现：
+```
+父对象
+│
+├─ 基础数据
+├─ string
+└─ 自定义对象
+       ↓
+     BaseData
+       ↓
+     byte[]
+```
+
+# 六、自定义网络数据类
+子类主要完成两件事：
+```
+1.计算自己的总字节长度
+2.规定成员变量写入 byte[] 的顺序
+```
+课件中的数据类就是通过重写 `GetBytesNum()` 和 `Writing()` 完成序列化。需要特别保证：
+```
+GetBytesNum() 中的字段=Writing() 中实际写入的字段
+```
+而且顺序必须固定。例如：
+```
+ID
+↓
+金币
+↓
+昵称
+↓
+装备
+↓
+在线状态
+```
+以后反序列化时也必须严格按照：
+```
+ID
+↓
+金币
+↓
+昵称
+↓
+装备
+↓
+在线状态
+```
+读取。
+
+# 七、完整代码
+## 1.NetworkDataBase.cs
+```
+using System;
+using System.Text;
+
+/// <summary>
+/// 网络二进制数据基类
+/// 统一提供基础类型写入 byte[] 的方法
+/// </summary>
+public abstract class NetworkDataBase
+{
+    /// <summary>
+    /// 获取当前数据序列化后的总字节数
+    /// </summary>
+    public abstract int GetBytesNum();
+
+    /// <summary>
+    /// 将当前对象序列化为 byte[]
+    /// </summary>
+    public abstract byte[] Writing();
+
+
+    /// <summary>
+    /// 写入 int
+    /// </summary>
+    protected void WriteInt(
+        byte[] bytes,
+        int value,
+        ref int index)
+    {
+        BitConverter
+            .GetBytes(value)
+            .CopyTo(bytes, index);
+
+        index += sizeof(int);
+    }
+
+    /// <summary>
+    /// 写入 short
+    /// </summary>
+    protected void WriteShort(
+        byte[] bytes,
+        short value,
+        ref int index)
+    {
+        BitConverter
+            .GetBytes(value)
+            .CopyTo(bytes, index);
+
+        index += sizeof(short);
+    }
+
+    /// <summary>
+    /// 写入 long
+    /// </summary>
+    protected void WriteLong(
+        byte[] bytes,
+        long value,
+        ref int index)
+    {
+        BitConverter
+            .GetBytes(value)
+            .CopyTo(bytes, index);
+
+        index += sizeof(long);
+    }
+
+    /// <summary>
+    /// 写入 float
+    /// </summary>
+    protected void WriteFloat(
+        byte[] bytes,
+        float value,
+        ref int index)
+    {
+        BitConverter
+            .GetBytes(value)
+            .CopyTo(bytes, index);
+
+        index += sizeof(float);
+    }
+
+    /// <summary>
+    /// 写入 bool
+    /// </summary>
+    protected void WriteBool(
+        byte[] bytes,
+        bool value,
+        ref int index)
+    {
+        BitConverter
+            .GetBytes(value)
+            .CopyTo(bytes, index);
+
+        index += sizeof(bool);
+    }
+
+    /// <summary>
+    /// 写入 byte
+    /// </summary>
+    protected void WriteByte(
+        byte[] bytes,
+        byte value,
+        ref int index)
+    {
+        bytes[index] = value;
+
+        index += sizeof(byte);
+    }
+
+    /// <summary>
+    /// 写入 UTF-8 字符串
+    /// 数据结构：
+    /// 4字节字符串长度 + N字节字符串数据
+    /// </summary>
+    protected void WriteString(
+        byte[] bytes,
+        string value,
+        ref int index)
+    {
+        byte[] strBytes =
+            Encoding.UTF8.GetBytes(value);
+
+        //先写字符串字节长度
+        WriteInt(
+            bytes,
+            strBytes.Length,
+            ref index
+        );
+
+        //再写字符串内容
+        strBytes.CopyTo(bytes, index);
+
+        index += strBytes.Length;
+    }
+
+    /// <summary>
+    /// 写入另一个网络数据对象
+    /// </summary>
+    protected void WriteData(
+        byte[] bytes,
+        NetworkDataBase data,
+        ref int index)
+    {
+        byte[] dataBytes = data.Writing();
+
+        dataBytes.CopyTo(bytes, index);
+
+        index += dataBytes.Length;
+    }
+}
+```
+
+## 2.WeaponData.cs
+```
+/// <summary>
+/// 武器数据
+/// </summary>
+public class WeaponData : NetworkDataBase
+{
+    /// <summary>
+    /// 武器ID
+    /// </summary>
+    public int weaponId;
+
+    /// <summary>
+    /// 攻击力
+    /// </summary>
+    public short attack;
+
+
+    public override int GetBytesNum()
+    {
+        return
+            sizeof(int) +
+            sizeof(short);
+    }
+
+    public override byte[] Writing()
+    {
+        byte[] bytes =
+            new byte[GetBytesNum()];
+
+        int index = 0;
+
+        WriteInt(
+            bytes,
+            weaponId,
+            ref index
+        );
+
+        WriteShort(
+            bytes,
+            attack,
+            ref index
+        );
+
+        return bytes;
+    }
+}
+```
+## 3.RoleData.cs
+```
+using System.Text;
+
+/// <summary>
+/// 角色网络数据
+/// </summary>
+public class RoleData : NetworkDataBase
+{
+    /// <summary>
+    /// 角色ID
+    /// </summary>
+    public int roleId;
+
+    /// <summary>
+    /// 等级
+    /// </summary>
+    public short level;
+
+    /// <summary>
+    /// 昵称
+    /// </summary>
+    public string nickname;
+
+    /// <summary>
+    /// 移动速度
+    /// </summary>
+    public float moveSpeed;
+
+    /// <summary>
+    /// 是否在线
+    /// </summary>
+    public bool online;
+
+    /// <summary>
+    /// 当前武器
+    /// </summary>
+    public WeaponData weapon;
+
+
+    public override int GetBytesNum()
+    {
+        //字符串真正占用的字节数
+        int nameBytesNum =
+            Encoding.UTF8.GetByteCount(nickname);
+
+        return
+            sizeof(int) +             //roleId
+            sizeof(short) +           //level
+            sizeof(int) +             //nickname字节长度
+            nameBytesNum +            //nickname
+            sizeof(float) +           //moveSpeed
+            sizeof(bool) +            //online
+            weapon.GetBytesNum();      //weapon
+    }
+
+    public override byte[] Writing()
+    {
+        byte[] bytes =
+            new byte[GetBytesNum()];
+
+        int index = 0;
+
+        //角色ID
+        WriteInt(
+            bytes,
+            roleId,
+            ref index
+        );
+
+        //等级
+        WriteShort(
+            bytes,
+            level,
+            ref index
+        );
+
+        //昵称
+        WriteString(
+            bytes,
+            nickname,
+            ref index
+        );
+
+        //移动速度
+        WriteFloat(
+            bytes,
+            moveSpeed,
+            ref index
+        );
+
+        //在线状态
+        WriteBool(
+            bytes,
+            online,
+            ref index
+        );
+
+        //武器数据
+        WriteData(
+            bytes,
+            weapon,
+            ref index
+        );
+
+        return bytes;
+    }
+}
+```
+## 4.RoleDataExample.cs
+这部分只负责创建实际游戏数据并进行序列化，不再使用 `Test`、`TestInfo` 这样的测试类命名：
+```
+using UnityEngine;
+
+/// <summary>
+/// 角色网络数据使用示例
+/// </summary>
+public class RoleDataExample : MonoBehaviour
+{
+    private void Start()
+    {
+        WeaponData weapon = new WeaponData
+        {
+            weaponId = 2001,
+            attack = 135
+        };
+
+        RoleData role = new RoleData
+        {
+            roleId = 10001,
+            level = 25,
+            nickname = "黑马王子",
+            moveSpeed = 5.5f,
+            online = true,
+            weapon = weapon
+        };
+
+        //将完整角色信息转换为网络字节数据
+        byte[] bytes = role.Writing();
+
+        Debug.Log(
+            $"角色数据序列化完成，共 {bytes.Length} Byte"
+        );
+
+        //以后可以直接交给 Socket
+        //socket.Send(bytes);
+    }
+}
+```
+最终 `RoleData` 的二进制布局为：
+```
+RoleData
+↓
+┌────────┬───────┬──────────────┬────────────┬───────────┬────────┬────────────────┐
+│ roleId │ level │ nickname长度 │ nickname   │ moveSpeed │ online │ WeaponData     │
+├────────┼───────┼──────────────┼────────────┼───────────┼────────┼────────────────┤
+│ 4 Byte │ 2Byte │    4 Byte    │   N Byte   │  4 Byte   │ 1 Byte │ 4 Byte + 2Byte │
+└────────┴───────┴──────────────┴────────────┴───────────┴────────┴────────────────┘
+```
+
+这节课真正需要掌握的结构就是：
+
+```
+NetworkDataBase
+↓
+封装基础类型 Writing 方法
+↓
+具体数据类继承
+↓
+GetBytesNum()
++
+Writing()
+↓
+对象统一转换为 byte[]
+```
+
+这样以后无论是：
+
+```
+角色数据
+背包数据
+装备数据
+登录数据
+战斗数据
+房间数据
+```
+
+都可以按照同样的方式扩展。
