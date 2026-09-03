@@ -5,3 +5,4 @@
 - [Lesson5：序列化](Assets/Scripts/Lesson5：序列化)
 - [Lesson6：序列化基类](Assets/Scripts/Lesson6：序列化基类)
 - [Lesson7：反序列化](Assets/Scripts/Lesson7：反序列化)
+- [Lesson8：反序列化基类](Assets/Scripts/Lesson8：反序列化基类)
